@@ -1,0 +1,855 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Trading Bot Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/tabulator-tables@5.6.2/dist/css/tabulator.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/notyf@3/notyf.min.css">
+  <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+  <script src="https://unpkg.com/tabulator-tables@5.6.2/dist/js/tabulator.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/notyf@3/notyf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dayjs@1/dayjs.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dayjs@1/plugin/utc.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dayjs@1/plugin/duration.js"></script>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #111827;
+      --text: #e5e7eb;
+      --muted: #9ca3af;
+      --accent: #10b981;
+      --danger: #ef4444;
+      --warn: #f59e0b;
+      --border: #1f2937;
+    }
+    body.light {
+      --bg: #f7fafc;
+      --panel: #ffffff;
+      --text: #0f172a;
+      --muted: #4b5563;
+      --accent: #059669;
+      --danger: #dc2626;
+      --warn: #d97706;
+      --border: #e5e7eb;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    a { color: var(--accent); }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .status-group {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      width: 100%;
+      margin: 12px 0;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.03);
+      color: var(--text);
+      font-weight: 600;
+      font-size: 12px;
+    }
+    .pill { padding: 8px 12px; border-radius: 10px; background: var(--panel); border: 1px solid var(--border); }
+    .title { font-size: 14px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+    .value { font-size: 18px; font-weight: 700; margin-top: 4px; }
+    .tabs {
+      display: flex;
+      gap: 10px;
+      padding: 10px 18px 0;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+      position: sticky;
+      top: 64px;
+      z-index: 9;
+    }
+    .tab {
+      padding: 10px 12px;
+      cursor: pointer;
+      border-radius: 8px 8px 0 0;
+      color: var(--muted);
+      border: 1px solid transparent;
+      border-bottom: none;
+      font-weight: 600;
+    }
+    .tab.active {
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-bottom: 1px solid var(--bg);
+    }
+    .panel { padding: 18px; }
+    .grid-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.12);
+    }
+    .card h3 { margin: 0 0 8px; font-size: 16px; }
+    .table-wrap { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 8px; }
+    button, select, input, textarea {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      color: var(--text);
+      font-family: inherit;
+    }
+    button { cursor: pointer; font-weight: 600; }
+    .btn-accent { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn-danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+    .flex { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .log-box { max-height: 320px; overflow: auto; background: #0b1220; padding: 10px; border-radius: 8px; border: 1px solid var(--border); font-family: ui-monospace, SFMono-Regular; font-size: 12px; }
+    .log-line { padding: 2px 0; border-bottom: 1px dotted rgba(255,255,255,0.05); }
+    .muted { color: var(--muted); }
+    .hidden { display: none !important; }
+    .offline {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.8);
+      color: #fff;
+      display: grid;
+      place-items: center;
+      text-align: center;
+      padding: 24px;
+      z-index: 20;
+    }
+    .tag { padding: 3px 6px; border-radius: 6px; font-size: 12px; font-weight: 700; }
+    .tag.up { background: rgba(16,185,129,0.15); color: #10b981; }
+    .tag.down { background: rgba(239,68,68,0.15); color: #ef4444; }
+    .tag.neutral { background: rgba(255,255,255,0.07); color: var(--text); }
+  </style>
+</head>
+<body>
+  <div id="offline" class="offline hidden">
+    <div>
+      <h2>Бот оффлайн / в загрузке</h2>
+      <p class="muted">Проверьте, что Python-бот запущен и доступен по localhost:8787<br>Статус health: <span id="offline-status">booting</span></p>
+      <button id="retry-health" class="btn-accent">Повторить проверку</button>
+    </div>
+  </div>
+  <header>
+    <div class="flex" style="gap:8px; flex-wrap:wrap;">
+      <div class="badge" id="mode-badge">mode: --</div>
+      <div class="badge" id="uptime-badge">uptime: --</div>
+      <div class="badge" id="tph-badge">TPH: --</div>
+      <div class="badge" id="latency-badge">latency: --</div>
+      <div class="badge" id="risk-badge">risk: --</div>
+    </div>
+    <div class="flex" style="gap:8px;">
+      <input id="token-input" type="password" placeholder="X-Auth-Token" style="width:180px;" />
+      <button id="save-token" class="btn-accent">Сохранить</button>
+      <button id="theme-toggle">Темная/Светлая</button>
+      <button id="advanced-toggle">Advanced mode</button>
+    </div>
+  </header>
+
+  <div class="tabs" id="tabs">
+    <div class="tab active" data-tab="overview">Overview</div>
+    <div class="tab" data-tab="charts">Charts</div>
+    <div class="tab" data-tab="positions">Positions</div>
+    <div class="tab" data-tab="trades">Trades</div>
+    <div class="tab" data-tab="regime">Regime/Sentiment</div>
+    <div class="tab" data-tab="risk">Risk & Frequency</div>
+    <div class="tab" data-tab="config">Config</div>
+    <div class="tab" data-tab="reports">Reports</div>
+    <div class="tab" data-tab="logs">Logs</div>
+    <div class="tab" data-tab="control">Control</div>
+  </div>
+
+  <main>
+    <section class="panel" id="panel-overview">
+      <div class="grid-two">
+        <div class="card">
+          <h3>Equity / PnL</h3>
+          <div class="status-group">
+            <div class="pill">
+              <div class="title">Equity now</div>
+              <div class="value" id="equity-now">--</div>
+            </div>
+            <div class="pill">
+              <div class="title">PnL day gross / net</div>
+              <div class="value" id="pnl-day">--</div>
+            </div>
+            <div class="pill">
+              <div class="title">Target TPh / Actual</div>
+              <div class="value" id="tph-target">--</div>
+            </div>
+            <div class="pill">
+              <div class="title">Open positions</div>
+              <div class="value" id="open-positions">--</div>
+            </div>
+          </div>
+          <div id="equity-chart" style="height:260px;"></div>
+        </div>
+        <div class="card">
+          <h3>Risk flags & Progress</h3>
+          <div class="status-group">
+            <div class="pill"><div class="title">Loss streak</div><div class="value" id="loss-streak">--</div></div>
+            <div class="pill"><div class="title">Exposure %</div><div class="value" id="exposure">--</div></div>
+            <div class="pill"><div class="title">Drawdown day %</div><div class="value" id="dd-day">--</div></div>
+            <div class="pill"><div class="title">Cooldown</div><div class="value" id="cooldown">--</div></div>
+          </div>
+          <div id="tph-progress" style="margin-top:16px;">
+            <div class="title">Цель по частоте</div>
+            <div style="height:12px; background:var(--border); border-radius:8px; overflow:hidden;">
+              <div id="tph-bar" style="height:12px; width:0%; background:var(--accent);"></div>
+            </div>
+          </div>
+          <div class="flex" style="margin-top:16px; gap:8px;">
+            <span class="tag" id="maker-share">Maker: --</span>
+            <span class="tag" id="taker-share">Taker: --</span>
+            <span class="tag" id="slip-tag">Проскальзывание: --</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel hidden" id="panel-charts">
+      <div class="flex" style="margin-bottom:12px;">
+        <select id="chart-symbol"></select>
+        <select id="chart-tf">
+          <option value="30s">30s</option>
+          <option value="1m">1m</option>
+          <option value="5m">5m</option>
+          <option value="15m">15m</option>
+        </select>
+        <button id="chart-refresh">Обновить</button>
+      </div>
+      <div id="ohlc-chart" style="height:420px;"></div>
+      <div id="subcharts" class="grid-two" style="margin-top:12px;">
+        <div class="card"><h3>RSI / MACD</h3><div id="indi-chart" style="height:260px;"></div></div>
+        <div class="card"><h3>Объём / OBV</h3><div id="vol-chart" style="height:260px;"></div></div>
+      </div>
+    </section>
+
+    <section class="panel hidden" id="panel-positions">
+      <div class="table-wrap"><div id="positions-table"></div></div>
+    </section>
+
+    <section class="panel hidden" id="panel-trades">
+      <div class="flex" style="margin-bottom:8px;">
+        <select id="trades-symbol-filter"><option value="all">Все символы</option></select>
+        <input id="trades-limit" type="number" min="10" max="500" value="100" style="width:100px;">
+        <button id="trades-refresh">Обновить</button>
+        <button id="trades-export">Экспорт CSV</button>
+      </div>
+      <div class="table-wrap"><div id="trades-table"></div></div>
+    </section>
+
+    <section class="panel hidden" id="panel-regime">
+      <div class="grid-two">
+        <div class="card"><h3>Режим рынка по символам</h3><div id="regime-table"></div></div>
+        <div class="card"><h3>Sentiment</h3><div id="sentiment-table"></div></div>
+      </div>
+      <div class="card" style="margin-top:12px;"><h3>Часовая адаптация</h3><div id="hourly-table"></div></div>
+    </section>
+
+    <section class="panel hidden" id="panel-risk">
+      <div class="grid-two">
+        <div class="card"><h3>Risk</h3><div id="risk-metrics"></div></div>
+        <div class="card"><h3>Frequency</h3><div id="tfc-metrics"></div></div>
+      </div>
+    </section>
+
+    <section class="panel hidden" id="panel-config">
+      <div class="card">
+        <h3>Config (readonly) <span class="muted">доступно без токена</span></h3>
+        <pre id="config-view" style="white-space:pre-wrap;"></pre>
+      </div>
+      <div class="card hidden" id="config-edit-card">
+        <h3>Редактирование whitelist</h3>
+        <div class="flex" style="margin-bottom:8px;">
+          <select id="config-key"></select>
+          <input id="config-value" placeholder="значение" style="width:200px;">
+          <button id="config-save" class="btn-accent">Сохранить</button>
+          <span class="muted">Изменения применяются горячо и логируются в аудит</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel hidden" id="panel-reports">
+      <div class="card">
+        <h3>Отчёты</h3>
+        <ul id="reports-list"></ul>
+      </div>
+    </section>
+
+    <section class="panel hidden" id="panel-logs">
+      <div class="flex" style="margin-bottom:8px;">
+        <input id="log-lines" type="number" min="50" max="1000" value="300" style="width:120px;">
+        <button id="log-refresh">Обновить</button>
+        <label class="flex" style="gap:6px;"><input type="checkbox" id="log-autoscroll" checked> авто-скролл</label>
+      </div>
+      <div class="log-box" id="log-box"></div>
+    </section>
+
+    <section class="panel hidden" id="panel-control">
+      <div class="grid-two">
+        <div class="card">
+          <h3>Торговля</h3>
+          <div class="flex">
+            <button data-action="start_trading" class="btn-accent">Старт</button>
+            <button data-action="stop_trading" class="btn-danger">Стоп</button>
+            <button data-action="flat_now" class="btn-danger">Закрыть всё</button>
+          </div>
+          <div class="flex" style="margin-top:10px;">
+            <input id="flat-symbol" placeholder="символ или all" style="width:150px;">
+            <button id="flat-symbol-btn">Закрыть символ</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Режимы / Пауза</h3>
+          <div class="flex" style="margin-bottom:8px;">
+            <select id="mode-select">
+              <option value="spot_paper">spot_paper</option>
+              <option value="spot_live">spot_live</option>
+              <option value="futures_paper">futures_paper</option>
+              <option value="futures_live">futures_live</option>
+            </select>
+            <button id="mode-apply">Сменить режим</button>
+          </div>
+          <div class="flex">
+            <input id="pause-min" type="number" min="1" max="120" value="15" style="width:100px;">
+            <button id="pause-btn">Пауза</button>
+            <button id="resume-btn">Снять паузу</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Символы / Конфиг</h3>
+          <div class="flex" style="margin-bottom:8px;">
+            <input id="symbols-input" placeholder="BTCUSDT,ETHUSDT" style="width:240px;">
+            <button id="symbols-apply">Применить</button>
+          </div>
+          <div class="flex">
+            <button id="reload-config">Перезагрузить конфиг</button>
+            <button id="force-hourly">Force hourly</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Whitelist параметр</h3>
+          <div class="flex" style="margin-bottom:8px;">
+            <select id="ctrl-key"></select>
+            <input id="ctrl-value" placeholder="значение" style="width:180px;">
+            <button id="ctrl-apply" class="btn-accent">Изменить</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    dayjs.extend(dayjs_plugin_utc);
+    dayjs.extend(dayjs_plugin_duration);
+    const notyf = new Notyf({ duration: 3500, position: { x: 'right', y: 'top' } });
+    const API = {
+      async get(path, params = {}) {
+        const url = new URL(path, window.location.origin);
+        Object.entries(params).forEach(([k,v]) => v !== undefined && url.searchParams.append(k, v));
+        const res = await fetch(url.toString(), { credentials: 'same-origin' });
+        if (!res.ok) throw new Error(`GET ${path} failed: ${res.status}`);
+        return res.json();
+      },
+      async post(path, body = {}) {
+        const token = sessionStorage.getItem('dashboard_token');
+        if (!token) throw new Error('Требуется X-Auth-Token');
+        const res = await fetch(path, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Auth-Token': token,
+          },
+          body: JSON.stringify(body),
+          credentials: 'same-origin',
+        });
+        if (!res.ok) {
+          const msg = await res.text();
+          throw new Error(msg || `POST ${path} failed`);
+        }
+        return res.json();
+      }
+    };
+
+    const state = {
+      health: null,
+      symbols: [],
+      ws: null,
+      wsTimer: null,
+      advanced: false,
+    };
+
+    const tabs = document.querySelectorAll('.tab');
+    tabs.forEach(tab => tab.addEventListener('click', () => switchTab(tab.dataset.tab)));
+
+    function switchTab(name) {
+      tabs.forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+      document.querySelectorAll('section.panel').forEach(p => p.classList.add('hidden'));
+      const target = document.getElementById(`panel-${name}`);
+      if (target) target.classList.remove('hidden');
+    }
+
+    document.getElementById('theme-toggle').onclick = () => {
+      document.body.classList.toggle('light');
+    };
+    document.getElementById('advanced-toggle').onclick = () => {
+      state.advanced = !state.advanced;
+      document.getElementById('config-edit-card').classList.toggle('hidden', !state.advanced);
+      document.getElementById('panel-control').classList.toggle('hidden', false);
+      notyf.open({ type: 'info', message: state.advanced ? 'Advanced mode включен' : 'Advanced mode выключен' });
+    };
+    document.getElementById('save-token').onclick = () => {
+      const token = document.getElementById('token-input').value.trim();
+      if (token) {
+        sessionStorage.setItem('dashboard_token', token);
+        notyf.success('Token сохранён в sessionStorage');
+      }
+    };
+
+    async function checkHealth(showToast=false) {
+      try {
+        const h = await API.get('/api/health');
+        state.health = h;
+        const offline = document.getElementById('offline');
+        if (h.status === 'ok') {
+          offline.classList.add('hidden');
+        } else {
+          document.getElementById('offline-status').textContent = h.status;
+          offline.classList.remove('hidden');
+        }
+        if (showToast) notyf.success('Health OK');
+        updateHeader(h);
+        return h.status === 'ok';
+      } catch (err) {
+        console.error(err);
+        document.getElementById('offline').classList.remove('hidden');
+        if (showToast) notyf.error('Health error');
+        return false;
+      }
+    }
+    document.getElementById('retry-health').onclick = () => checkHealth(true);
+
+    function updateHeader(h) {
+      const modeBadge = document.getElementById('mode-badge');
+      modeBadge.textContent = `mode: ${h.bot || '--'}`;
+      const uptime = dayjs.duration(h.uptime_sec || 0, 'seconds');
+      document.getElementById('uptime-badge').textContent = `uptime: ${uptime.humanize()}`;
+    }
+
+    async function loadSummary() {
+      try {
+        const [summary, risk, tfc] = await Promise.all([
+          API.get('/api/summary'),
+          API.get('/api/risk'),
+          API.get('/api/tfc'),
+        ]);
+        document.getElementById('equity-now').textContent = `$${(summary.equity_now||0).toFixed(2)}`;
+        document.getElementById('pnl-day').textContent = `G ${summary.pnl_day_gross?.toFixed?.(2)||'--'} / N ${(summary.pnl_day_net||0).toFixed(2)}`;
+        document.getElementById('tph-badge').textContent = `TPH: ${(summary.tph_current||0).toFixed(1)}`;
+        document.getElementById('latency-badge').textContent = `latency: ${(summary.latency_ms_avg||0).toFixed(0)} ms`;
+        document.getElementById('risk-badge').textContent = `risk: ${(summary.risk_flags||[]).join(',')||'ok'}`;
+        document.getElementById('open-positions').textContent = summary.open_positions ?? '--';
+        document.getElementById('loss-streak').textContent = risk.loss_streak ?? '--';
+        document.getElementById('exposure').textContent = `${(risk.exposure_pct||0).toFixed(2)}%`;
+        document.getElementById('dd-day').textContent = `${(risk.dd_day_pct||0).toFixed(2)}%`;
+        document.getElementById('cooldown').textContent = risk.cooldown_until || '—';
+        document.getElementById('tph-target').textContent = `${tfc.current_tph||0} / ${tfc.target_tph||'-'}`;
+        const ratio = tfc.target_tph ? Math.min(100, (tfc.current_tph||0)/tfc.target_tph*100) : 0;
+        document.getElementById('tph-bar').style.width = `${ratio}%`;
+        document.getElementById('maker-share').textContent = `Maker: ${summary.maker_share ?? '--'}%`;
+        document.getElementById('taker-share').textContent = `Taker: ${summary.taker_share ?? '--'}%`;
+        document.getElementById('slip-tag').textContent = `Проскальзывание: ${(summary.slippage_avg||0).toFixed(3)}`;
+      } catch(err) {
+        console.warn('summary error', err);
+      }
+    }
+
+    async function loadSymbols() {
+      try {
+        const res = await API.get('/api/symbols');
+        state.symbols = res.symbols || [];
+        const sel = document.getElementById('chart-symbol');
+        sel.innerHTML = '';
+        state.symbols.forEach(sym => {
+          const opt = document.createElement('option'); opt.value = sym; opt.textContent = sym; sel.appendChild(opt);
+        });
+        const tradesFilter = document.getElementById('trades-symbol-filter');
+        tradesFilter.innerHTML = '<option value="all">Все символы</option>';
+        state.symbols.forEach(sym => {
+          const opt = document.createElement('option'); opt.value = sym; opt.textContent = sym; tradesFilter.appendChild(opt);
+        });
+      } catch(err) { console.warn(err); }
+    }
+
+    async function loadOHLC() {
+      const symbol = document.getElementById('chart-symbol').value;
+      const tf = document.getElementById('chart-tf').value;
+      try {
+        const data = await API.get('/api/ohlc', { symbol, tf, lookback: 400 });
+        renderOHLC(symbol, tf, data);
+      } catch(err) { notyf.error('Не удалось загрузить OHLC'); console.error(err); }
+    }
+    document.getElementById('chart-refresh').onclick = loadOHLC;
+
+    function renderOHLC(symbol, tf, data) {
+      const t = data.map(b => b.t);
+      const o = data.map(b => b.o);
+      const h = data.map(b => b.h);
+      const l = data.map(b => b.l);
+      const c = data.map(b => b.c);
+      const v = data.map(b => b.v);
+      Plotly.newPlot('ohlc-chart', [{ x:t, open:o, high:h, low:l, close:c, type:'candlestick', name:symbol, increasing:{line:{color:'#10b981'}}, decreasing:{line:{color:'#ef4444'}} }], { margin:{l:40,r:10,t:20,b:30}, dragmode:'pan', xaxis:{rangeslider:{visible:false}}, yaxis:{tickprefix:'$'}, paper_bgcolor:'transparent', plot_bgcolor:'transparent' }, {responsive:true});
+      Plotly.newPlot('indi-chart', [
+        { x:t, y:c, type:'scatter', name:'Close', line:{color:'#a855f7'} },
+        { x:t, y:data.map(b=>b.rsi ?? null), type:'scatter', name:'RSI', line:{color:'#06b6d4'} },
+        { x:t, y:data.map(b=>b.macd ?? null), type:'scatter', name:'MACD', line:{color:'#f59e0b'} },
+      ], { margin:{l:40,r:10,t:20,b:30}, paper_bgcolor:'transparent', plot_bgcolor:'transparent' });
+      Plotly.newPlot('vol-chart', [
+        { x:t, y:v, type:'bar', name:'Volume', marker:{color:'#1f2937'} },
+        { x:t, y:data.map(b=>b.obv ?? null), type:'scatter', name:'OBV', line:{color:'#10b981'} }
+      ], { margin:{l:40,r:10,t:20,b:30}, paper_bgcolor:'transparent', plot_bgcolor:'transparent' });
+    }
+
+    const positionsTable = new Tabulator('#positions-table', {
+      height: 420,
+      layout: 'fitColumns',
+      columns: [
+        {title:'Символ', field:'symbol'},
+        {title:'Сторона', field:'side'},
+        {title:'Qty', field:'qty', formatter:'money', formatterParams:{precision:4}},
+        {title:'Entry', field:'entry_price', formatter:'money', formatterParams:{precision:2}},
+        {title:'Now', field:'price_now', formatter:'money', formatterParams:{precision:2}},
+        {title:'SL', field:'sl', formatter:'money', formatterParams:{precision:2}},
+        {title:'TP', field:'tp', formatter:'money', formatterParams:{precision:2}},
+        {title:'PnL', field:'unrealized_pnl', formatter: pnlFormatter },
+        {title:'Age', field:'age_sec', formatter: ageFormatter },
+        {title:'Regime', field:'regime'},
+        {title:'Действия', field:'symbol', formatter: actionFormatter, width:140, hozAlign:'center' },
+      ]
+    });
+
+    function pnlFormatter(cell) {
+      const v = cell.getValue();
+      const cls = v > 0 ? 'tag up' : v < 0 ? 'tag down' : 'tag neutral';
+      return `<span class="${cls}">${v?.toFixed?.(2) ?? '--'}</span>`;
+    }
+    function ageFormatter(cell) {
+      const sec = cell.getValue();
+      if (!sec) return '—';
+      const d = dayjs.duration(sec, 'seconds');
+      return d.humanize();
+    }
+    function actionFormatter(cell) {
+      const sym = cell.getValue();
+      return `<button class="btn-danger" data-close="${sym}" style="padding:4px 8px;">Закрыть</button>`;
+    }
+    document.getElementById('positions-table').addEventListener('click', async (e) => {
+      if (e.target.dataset.close) {
+        const sym = e.target.dataset.close;
+        if (!confirm(`Закрыть позицию ${sym}?`)) return;
+        try {
+          await API.post('/api/control/flat_now', { symbol: sym });
+          notyf.success(`Позиция ${sym} закрыта`);
+          loadPositions();
+        } catch(err) { notyf.error(err.message); }
+      }
+    });
+
+    async function loadPositions() {
+      try {
+        const rows = await API.get('/api/positions');
+        positionsTable.setData(rows);
+      } catch(err) { console.warn('positions', err); }
+    }
+
+    const tradesTable = new Tabulator('#trades-table', {
+      height: 420,
+      layout: 'fitDataStretch',
+      columns: [
+        {title:'Вход', field:'opened_at'},
+        {title:'Выход', field:'closed_at'},
+        {title:'Символ', field:'symbol'},
+        {title:'Сторона', field:'side'},
+        {title:'Qty', field:'qty', formatter:'money', formatterParams:{precision:4}},
+        {title:'Entry', field:'entry_price', formatter:'money', formatterParams:{precision:2}},
+        {title:'Exit', field:'exit_price', formatter:'money', formatterParams:{precision:2}},
+        {title:'Gross', field:'gross', formatter:pnlFormatter},
+        {title:'Fees', field:'fees', formatter:'money', formatterParams:{precision:2}},
+        {title:'Tax', field:'tax', formatter:'money', formatterParams:{precision:2}},
+        {title:'Net', field:'net', formatter:pnlFormatter},
+        {title:'Длит.', field:'duration_sec', formatter:ageFormatter},
+        {title:'Причина', field:'exit_reason'},
+        {title:'Режим', field:'regime'},
+        {title:'Conf', field:'confidence'},
+      ]
+    });
+    document.getElementById('trades-refresh').onclick = loadTrades;
+    document.getElementById('trades-export').onclick = () => tradesTable.download('csv', 'trades.csv');
+
+    async function loadTrades() {
+      const sym = document.getElementById('trades-symbol-filter').value;
+      const limit = Number(document.getElementById('trades-limit').value || 100);
+      try {
+        const data = await API.get('/api/trades', { symbol: sym === 'all' ? undefined : sym, limit });
+        tradesTable.setData(data);
+      } catch(err) { console.warn('trades', err); }
+    }
+
+    const regimeTable = new Tabulator('#regime-table', {
+      layout:'fitColumns', height:300,
+      columns:[{title:'Символ', field:'symbol'}, {title:'Режим', field:'regime'}]
+    });
+    const sentimentTable = new Tabulator('#sentiment-table', {
+      layout:'fitColumns', height:300,
+      columns:[
+        {title:'Символ', field:'symbol'},
+        {title:'Sentiment', field:'combined_sentiment', formatter:pnlFormatter},
+        {title:'High impact 5m', field:'high_impact_events_5m'},
+      ]
+    });
+    const hourlyTable = new Tabulator('#hourly-table', {
+      layout:'fitColumns', height:220,
+      columns:[
+        {title:'Символ', field:'symbol'},
+        {title:'Режим', field:'regime'},
+        {title:'ATR avg', field:'avg_atr_12h'},
+        {title:'Conf adj', field:'confidence_adjustment'},
+        {title:'SL adj', field:'sl_mult_adjustment'},
+        {title:'TP adj', field:'tp_mult_adjustment'},
+        {title:'ts', field:'timestamp'},
+      ]
+    });
+
+    async function loadRegime() {
+      try {
+        const [reg, snap, hourly] = await Promise.all([
+          API.get('/api/regime'),
+          Promise.all((state.symbols||[]).map(sym => API.get('/api/snapshot', {symbol:sym}).then(r=>({...r,symbol:sym})))),
+          API.get('/api/hourly_summary')
+        ]);
+        regimeTable.setData(Object.entries(reg).map(([symbol, regime]) => ({symbol, regime})));
+        sentimentTable.setData(snap);
+        hourlyTable.setData(hourly);
+      } catch(err) { console.warn(err); }
+    }
+
+    async function loadRisk() {
+      try {
+        const [risk, tfc] = await Promise.all([API.get('/api/risk'), API.get('/api/tfc')]);
+        document.getElementById('risk-metrics').innerHTML = `
+          <p>Loss streak: ${risk.loss_streak}</p>
+          <p>Exposure: ${(risk.exposure_pct||0).toFixed(2)}%</p>
+          <p>Drawdown day: ${(risk.dd_day_pct||0).toFixed(2)}%</p>
+          <p>Cooldown until: ${risk.cooldown_until||'—'}</p>
+          <p>Kill switch: ${risk.kill_switch}</p>`;
+        document.getElementById('tfc-metrics').innerHTML = `
+          <p>Target TPh: ${tfc.target_tph}</p>
+          <p>Current TPh: ${tfc.current_tph}</p>
+          <p>Fill-rate min: ${tfc.min_fill_rate_pct}%</p>
+          <p>Mode: ${tfc.mode}</p>`;
+      } catch(err) { console.warn(err); }
+    }
+
+    async function loadConfig() {
+      try {
+        const cfg = await API.get('/api/config');
+        document.getElementById('config-view').textContent = JSON.stringify(cfg, null, 2);
+        const wl = await API.get('/api/config/whitelist');
+        const sel = document.getElementById('config-key');
+        const sel2 = document.getElementById('ctrl-key');
+        sel.innerHTML = ''; sel2.innerHTML='';
+        wl.keys.forEach(k => {
+          const o=document.createElement('option'); o.value=k; o.textContent=k; sel.appendChild(o);
+          const o2=o.cloneNode(true); sel2.appendChild(o2);
+        });
+      } catch(err) { console.warn(err); }
+    }
+
+    async function loadReports() {
+      try {
+        const res = await API.get('/api/reports');
+        const list = document.getElementById('reports-list');
+        list.innerHTML = '';
+        (res.reports||[]).forEach(r => {
+          const li=document.createElement('li');
+          li.innerHTML = `<a href="${r.url}" target="_blank">${r.name}</a> — ${r.summary||''}`;
+          list.appendChild(li);
+        });
+      } catch(err) { console.warn(err); }
+    }
+
+    async function loadLogs() {
+      const lines = Number(document.getElementById('log-lines').value || 300);
+      try {
+        const res = await API.get('/api/logs/tail', { lines });
+        const box = document.getElementById('log-box');
+        box.innerHTML = '';
+        (res || []).forEach(line => {
+          const div = document.createElement('div');
+          div.className='log-line';
+          div.textContent=line;
+          box.appendChild(div);
+        });
+        if (document.getElementById('log-autoscroll').checked) box.scrollTop = box.scrollHeight;
+      } catch(err) { console.warn(err); }
+    }
+    document.getElementById('log-refresh').onclick = loadLogs;
+
+    document.querySelectorAll('#panel-control button[data-action]').forEach(btn => {
+      btn.onclick = async () => {
+        const action = btn.dataset.action;
+        if (['stop_trading','flat_now'].includes(action)) {
+          if (!confirm('Подтвердите действие')) return;
+        }
+        try {
+          await API.post(`/api/control/${action}`);
+          notyf.success(`${action} выполнено`);
+        } catch(err) { notyf.error(err.message); }
+      };
+    });
+    document.getElementById('flat-symbol-btn').onclick = async () => {
+      const symbol = document.getElementById('flat-symbol').value || 'all';
+      try { await API.post('/api/control/flat_now', { symbol }); notyf.success('Закрыто'); }
+      catch(err){ notyf.error(err.message); }
+    };
+    document.getElementById('mode-apply').onclick = async () => {
+      const mode = document.getElementById('mode-select').value;
+      try { await API.post('/api/control/switch_mode', { mode }); notyf.success('Режим изменён'); }
+      catch(err){ notyf.error(err.message); }
+    };
+    document.getElementById('pause-btn').onclick = async () => {
+      const minutes = Number(document.getElementById('pause-min').value||10);
+      try { await API.post('/api/control/pause', { minutes }); notyf.success('Пауза установлена'); }
+      catch(err){ notyf.error(err.message); }
+    };
+    document.getElementById('resume-btn').onclick = async () => {
+      try { await API.post('/api/control/resume'); notyf.success('Пауза снята'); }
+      catch(err){ notyf.error(err.message); }
+    };
+    document.getElementById('symbols-apply').onclick = async () => {
+      const symbols = document.getElementById('symbols-input').value.split(',').map(s=>s.trim()).filter(Boolean);
+      try { await API.post('/api/control/set_symbols', { symbols }); notyf.success('Символы обновлены'); loadSymbols(); }
+      catch(err){ notyf.error(err.message); }
+    };
+    document.getElementById('reload-config').onclick = async () => {
+      try { await API.post('/api/control/reload_config'); notyf.success('Конфиг перезагружен'); loadConfig(); }
+      catch(err){ notyf.error(err.message); }
+    };
+    document.getElementById('force-hourly').onclick = async () => {
+      try { await API.post('/api/control/force_hourly'); notyf.success('Hourly recalibration запущена'); }
+      catch(err){ notyf.error(err.message); }
+    };
+    document.getElementById('config-save').onclick = async () => {
+      const key = document.getElementById('config-key').value;
+      const value = document.getElementById('config-value').value;
+      try { await API.post('/api/control/set', { key, value }); notyf.success('Параметр изменён'); loadConfig(); }
+      catch(err){ notyf.error(err.message); }
+    };
+    document.getElementById('ctrl-apply').onclick = async () => {
+      const key = document.getElementById('ctrl-key').value;
+      const value = document.getElementById('ctrl-value').value;
+      try { await API.post('/api/control/set', { key, value }); notyf.success('Изменено'); loadConfig(); }
+      catch(err){ notyf.error(err.message); }
+    };
+
+    async function connectWS() {
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const url = `${proto}//${window.location.host}/ws/stream`;
+      try {
+        state.ws = new WebSocket(url);
+        state.ws.onopen = () => {
+          notyf.open({ type:'info', message:'WS подключен' });
+          clearInterval(state.wsTimer);
+        };
+        state.ws.onmessage = (ev) => {
+          const msg = JSON.parse(ev.data);
+          handleEvent(msg);
+        };
+        state.ws.onclose = () => {
+          notyf.open({ type:'warning', message:'WS закрыт, fallback на pull' });
+          scheduleWSReconnect();
+        };
+        state.ws.onerror = () => {
+          scheduleWSReconnect();
+        };
+      } catch(err) {
+        console.warn('ws error', err); scheduleWSReconnect();
+      }
+    }
+    function scheduleWSReconnect() {
+      if (state.wsTimer) return;
+      state.wsTimer = setInterval(connectWS, 5000);
+    }
+
+    function handleEvent(msg) {
+      switch(msg.type) {
+        case 'price_tick':
+          document.getElementById('latency-badge').textContent = `tick: ${msg.data.symbol} ${msg.data.price}`;
+          break;
+        case 'position_update':
+        case 'trade_closed':
+          loadPositions(); loadTrades(); loadSummary(); break;
+        case 'risk_alert':
+          notyf.open({ type:'warning', message: msg.data?.message || 'Risk alert' });
+          loadRisk();
+          break;
+        case 'tfc_update':
+          loadSummary();
+          break;
+        case 'hourly_recalibrated':
+          loadRegime();
+          break;
+        case 'log_line':
+          appendLog(msg.data);
+          break;
+      }
+    }
+    function appendLog(line) {
+      const box = document.getElementById('log-box');
+      const div = document.createElement('div');
+      div.className='log-line'; div.textContent=line;
+      box.appendChild(div);
+      if (box.childNodes.length > 800) box.removeChild(box.firstChild);
+      if (document.getElementById('log-autoscroll').checked) box.scrollTop = box.scrollHeight;
+    }
+
+    async function init() {
+      await checkHealth();
+      await loadSymbols();
+      await Promise.all([loadSummary(), loadPositions(), loadTrades(), loadRegime(), loadRisk(), loadConfig(), loadReports(), loadLogs()]);
+      loadOHLC();
+      connectWS();
+      setInterval(loadSummary, 15_000);
+      setInterval(loadPositions, 20_000);
+      setInterval(loadTrades, 60_000);
+      setInterval(loadLogs, 30_000);
+    }
+
+    document.addEventListener('DOMContentLoaded', init);
+  </script>
+</body>
+</html>
