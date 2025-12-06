@@ -55,6 +55,8 @@ class Position:
     entry_price: float
     unrealized_pnl: float
     leverage: float
+    stop_loss: float | None = None
+    take_profit: float | None = None
 
 
 class BaseExchangeClient(ABC):
@@ -81,7 +83,8 @@ class BaseExchangeClient(ABC):
         ...
 
     @abstractmethod
-    async def close_position(self, symbol: str) -> None:
+    async def close_position(self, symbol: str) -> float:
+        """Close position for the symbol and return realized PnL (can be 0.0 if nothing to close)."""
         ...
 
     @abstractmethod
@@ -103,6 +106,8 @@ class PaperExchangeClient(BaseExchangeClient):
         self.orders: Dict[str, Order] = {}
         self.positions: Dict[str, Position] = {}
         self._price_cache: Dict[str, float] = {symbol: self._initial_price(symbol) for symbol in settings.SYMBOLS}
+        self._drift_direction: Dict[str, float] = {symbol: random.choice([-0.001, 0.001]) for symbol in settings.SYMBOLS}
+        self._closing_symbols: set[str] = set()
         logger.info("Initialized paper exchange with starting equity %.2f", self.starting_equity)
 
     def _initial_price(self, symbol: str) -> float:
@@ -111,12 +116,18 @@ class PaperExchangeClient(BaseExchangeClient):
 
     def _next_price(self, symbol: str) -> float:
         prev = self._price_cache.get(symbol, self._initial_price(symbol))
-        drift = random.uniform(-0.002, 0.002)
-        noise = random.uniform(-0.001, 0.001)
-        new_price = prev * (1 + drift + noise)
-        new_price = max(new_price, 0.1)
+        drift = self._drift_direction.get(symbol, 0.0)
+        if random.random() < 0.05:
+            drift = drift * -1
+            self._drift_direction[symbol] = drift
+        step = drift + random.uniform(-0.0015, 0.0015)
+        new_price = max(prev * (1 + step), 0.1)
         self._price_cache[symbol] = new_price
         return new_price
+
+    def _compute_pnl(self, position: Position, price: float) -> float:
+        direction = 1 if position.side == OrderSide.BUY else -1
+        return (price - position.entry_price) * position.qty * direction
 
     async def get_klines(self, symbol: str, interval: str, limit: int) -> List[dict]:
         now = datetime.utcnow()
@@ -124,9 +135,9 @@ class PaperExchangeClient(BaseExchangeClient):
         klines: List[dict] = []
         for i in range(limit):
             price = self._next_price(symbol)
-            delta = random.uniform(-0.003, 0.003)
-            open_price = price * (1 - delta)
-            close_price = price * (1 + delta)
+            delta = random.uniform(-0.002, 0.002)
+            open_price = max(price * (1 - delta), 0.1)
+            close_price = max(price * (1 + delta), 0.1)
             high = max(open_price, close_price) * (1 + abs(delta))
             low = min(open_price, close_price) * (1 - abs(delta))
             volume = random.uniform(50, 500)
@@ -144,7 +155,29 @@ class PaperExchangeClient(BaseExchangeClient):
 
     async def get_price(self, symbol: str) -> float:
         price = self._next_price(symbol)
+        self._evaluate_stops(symbol, price)
         return price
+
+    def _evaluate_stops(self, symbol: str, price: float) -> None:
+        position = self.positions.get(symbol)
+        if not position:
+            return
+        triggered = False
+        if position.side == OrderSide.BUY:
+            if position.stop_loss and price <= position.stop_loss:
+                triggered = True
+            if position.take_profit and price >= position.take_profit:
+                triggered = True
+        else:
+            if position.stop_loss and price >= position.stop_loss:
+                triggered = True
+            if position.take_profit and price <= position.take_profit:
+                triggered = True
+        if triggered:
+            logger.info("SL/TP triggered for %s at price %.4f", symbol, price)
+            if symbol not in self._closing_symbols:
+                self._closing_symbols.add(symbol)
+                asyncio.create_task(self.close_position(symbol))
 
     async def create_order(
         self,
@@ -157,26 +190,39 @@ class PaperExchangeClient(BaseExchangeClient):
     ) -> Order:
         price = await self.get_price(symbol)
         order_id = f"paper-{len(self.orders) + 1}"
-        position = self.positions.get(symbol)
+        existing = self.positions.get(symbol)
         pnl = 0.0
-        if position:
-            logger.debug("Updating existing position for %s", symbol)
-            combined_qty = position.qty + qty if side == position.side else position.qty - qty
-            if combined_qty <= 0:
-                await self.close_position(symbol)
-            else:
-                position.qty = combined_qty
-                position.entry_price = (position.entry_price + price) / 2
+        if existing:
+            pnl = await self._handle_existing_position(existing, side, qty, price)
+
+        remaining_qty = qty
+        if existing and existing.side != side:
+            overlap = min(existing.qty, qty)
+            remaining_qty = max(qty - overlap, 0)
+            if existing.qty <= overlap:
+                self.positions.pop(symbol, None)
+
+        if remaining_qty > 0:
+            position = self.positions.get(symbol)
+            if position and position.side == side:
+                total_qty = position.qty + remaining_qty
+                position.entry_price = ((position.entry_price * position.qty) + (price * remaining_qty)) / total_qty
+                position.qty = total_qty
+                position.stop_loss = stop_loss or position.stop_loss
+                position.take_profit = take_profit or position.take_profit
                 self.positions[symbol] = position
-        else:
-            self.positions[symbol] = Position(
-                symbol=symbol,
-                side=side,
-                qty=qty,
-                entry_price=price,
-                unrealized_pnl=0.0,
-                leverage=leverage,
-            )
+            else:
+                self.positions[symbol] = Position(
+                    symbol=symbol,
+                    side=side,
+                    qty=remaining_qty,
+                    entry_price=price,
+                    unrealized_pnl=0.0,
+                    leverage=leverage,
+                    stop_loss=stop_loss,
+                    take_profit=take_profit,
+                )
+
         order = Order(
             id=order_id,
             symbol=symbol,
@@ -194,11 +240,26 @@ class PaperExchangeClient(BaseExchangeClient):
         logger.info("Created paper order %s %s qty=%.4f at %.2f", side.value, symbol, qty, price)
         return order
 
-    async def close_position(self, symbol: str) -> None:
+    async def _handle_existing_position(self, position: Position, incoming_side: OrderSide, qty: float, price: float) -> float:
+        if position.side == incoming_side:
+            return 0.0
+        overlap = min(position.qty, qty)
+        pnl = self._compute_pnl(Position(position.symbol, position.side, overlap, position.entry_price, 0.0, position.leverage), price)
+        position.qty -= overlap
+        self.realized_pnl += pnl
+        if position.qty <= 0:
+            self.positions.pop(position.symbol, None)
+        else:
+            self.positions[position.symbol] = position
+        logger.info("Closed %s size %.4f on flip; PnL=%.4f", position.symbol, overlap, pnl)
+        return pnl
+
+    async def close_position(self, symbol: str) -> float:
         position = self.positions.get(symbol)
         if not position:
             logger.debug("No open position to close for %s", symbol)
-            return
+            self._closing_symbols.discard(symbol)
+            return 0.0
         price = await self.get_price(symbol)
         pnl = self._compute_pnl(position, price)
         self.realized_pnl += pnl
@@ -208,11 +269,9 @@ class PaperExchangeClient(BaseExchangeClient):
                 order.closed_at = datetime.utcnow()
                 order.pnl = pnl
         logger.info("Closed position %s %s at %.2f PnL=%.2f", position.side.value, symbol, price, pnl)
-        del self.positions[symbol]
-
-    def _compute_pnl(self, position: Position, price: float) -> float:
-        direction = 1 if position.side == OrderSide.BUY else -1
-        return (price - position.entry_price) * position.qty * direction
+        self.positions.pop(symbol, None)
+        self._closing_symbols.discard(symbol)
+        return pnl
 
     async def get_open_positions(self) -> List[Position]:
         positions: List[Position] = []
@@ -227,6 +286,8 @@ class PaperExchangeClient(BaseExchangeClient):
                     entry_price=position.entry_price,
                     unrealized_pnl=unrealized,
                     leverage=position.leverage,
+                    stop_loss=position.stop_loss,
+                    take_profit=position.take_profit,
                 )
             )
         return positions
@@ -240,18 +301,18 @@ class PaperExchangeClient(BaseExchangeClient):
 
 
 class LiveExchangeClient(BaseExchangeClient):
-    """Placeholder for future live trading integration."""
+    """Placeholder for future live trading integration (NOT production ready)."""
 
     def __init__(self, settings: Settings) -> None:
-        logger.warning(
-            "LiveExchangeClient is not implemented; DO NOT use for production trading."
-        )
+        logger.warning("LiveExchangeClient is not implemented; DO NOT use for production trading.")
         self.settings = settings
 
     async def get_klines(self, symbol: str, interval: str, limit: int) -> List[dict]:
+        logger.warning("LiveExchangeClient.get_klines called but not implemented")
         raise NotImplementedError("Live trading not implemented")
 
     async def get_price(self, symbol: str) -> float:
+        logger.warning("LiveExchangeClient.get_price called but not implemented")
         raise NotImplementedError("Live trading not implemented")
 
     async def create_order(
@@ -263,15 +324,19 @@ class LiveExchangeClient(BaseExchangeClient):
         stop_loss: float | None = None,
         take_profit: float | None = None,
     ) -> Order:
+        logger.warning("LiveExchangeClient.create_order called but not implemented")
         raise NotImplementedError("Live trading not implemented")
 
-    async def close_position(self, symbol: str) -> None:
+    async def close_position(self, symbol: str) -> float:
+        logger.warning("LiveExchangeClient.close_position called but not implemented")
         raise NotImplementedError("Live trading not implemented")
 
     async def get_open_positions(self) -> List[Position]:
+        logger.warning("LiveExchangeClient.get_open_positions called but not implemented")
         raise NotImplementedError("Live trading not implemented")
 
     async def get_account_equity(self) -> float:
+        logger.warning("LiveExchangeClient.get_account_equity called but not implemented")
         raise NotImplementedError("Live trading not implemented")
 
 

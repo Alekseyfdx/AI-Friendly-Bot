@@ -1,16 +1,15 @@
-"""Entry point orchestrating the trading bot."""
-from __future__ import annotations
-
 import asyncio
 import contextlib
+import csv
 import logging
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from typing import Optional
 
-from config import Settings, load_settings
+from config import Settings, describe_settings, is_live_trading, load_settings
 from data_feed import GlobalDataFusion, init_data_fusion
-from exchange import BaseExchangeClient, OrderSide, create_exchange_client
-from strategy import RiskEngine, StrategyEngine
+from exchange import BaseExchangeClient, OrderSide, Position, create_exchange_client
+from strategy import Bar, RiskEngine, StrategyEngine, latest_atr_value
 
 logger = logging.getLogger("bot.main")
 
@@ -25,9 +24,15 @@ def _configure_logging(settings: Settings) -> None:
         logging.getLogger().addHandler(file_handler)
 
 
-def _extract_atr(strategy: StrategyEngine, klines: list[dict]) -> float:
-    bars = strategy._bars_from_klines(klines)  # Using protected helper intentionally inside orchestrator
-    return strategy.latest_atr_for_symbol("", bars)
+def _write_trade_log(row: list[str]) -> None:
+    path = Path("trades.csv")
+    header = ["timestamp", "symbol", "side", "entry_price", "exit_price", "qty", "pnl", "equity_before", "equity_after", "reason"]
+    write_header = not path.exists()
+    with path.open("a", newline="") as f:
+        writer = csv.writer(f)
+        if write_header:
+            writer.writerow(header)
+        writer.writerow(row)
 
 
 async def main_loop(
@@ -43,11 +48,41 @@ async def main_loop(
         try:
             equity = await exchange.get_account_equity()
             open_positions = await exchange.get_open_positions()
+            opened_this_cycle = 0
 
             for symbol in settings.SYMBOLS:
+                if opened_this_cycle >= settings.MAX_OPEN_POSITIONS:
+                    logger.info("Max positions reached for this cycle; skipping remaining symbols")
+                    break
+
                 klines = await exchange.get_klines(symbol, settings.TIMEFRAME, settings.HISTORY_BARS)
-                atr_value = _extract_atr(strategy, klines)
-                signal = await strategy.generate_signal(symbol, exchange, fusion)
+                bars: list[Bar] = strategy.bars_from_klines(klines)
+                snapshot = fusion.get_snapshot(symbol)
+                signal = await strategy.generate_signal_from_bars(symbol, bars, snapshot)
+                atr_value = latest_atr_value(bars)
+
+                existing = [p for p in open_positions if p.symbol == symbol]
+                if existing and (signal.action == "FLAT" or existing[0].side.value != signal.action):
+                    pnl = await exchange.close_position(symbol)
+                    risk_engine.register_trade_pnl(pnl, equity)
+                    equity = await exchange.get_account_equity()
+                    direction = 1 if existing[0].side == OrderSide.BUY else -1
+                    exit_price = existing[0].entry_price + (pnl / max(existing[0].qty * direction, 1e-9))
+                    _write_trade_log([
+                        f"{asyncio.get_event_loop().time():.3f}",
+                        symbol,
+                        existing[0].side.value,
+                        f"{existing[0].entry_price:.4f}",
+                        f"{exit_price:.4f}",
+                        f"{existing[0].qty:.6f}",
+                        f"{pnl:.4f}",
+                        f"{equity - pnl:.2f}",
+                        f"{equity:.2f}",
+                        signal.reason,
+                    ])
+                    open_positions = [p for p in open_positions if p.symbol != symbol]
+                    if signal.action == "FLAT":
+                        continue
 
                 if signal.action == "FLAT":
                     logger.debug("Symbol %s: FLAT (%s)", symbol, signal.reason)
@@ -63,14 +98,17 @@ async def main_loop(
                     logger.info("Computed size <= 0 for %s, skipping", symbol)
                     continue
 
+                stop_loss = price - 1.5 * atr_value if signal.action == "LONG" else price + 1.5 * atr_value
+                take_profit = price + 3.0 * atr_value if signal.action == "LONG" else price - 3.0 * atr_value
+
                 side = OrderSide.BUY if signal.action == "LONG" else OrderSide.SELL
                 order = await exchange.create_order(
                     symbol=symbol,
                     side=side,
                     qty=qty,
                     leverage=settings.MAX_LEVERAGE,
-                    stop_loss=None,
-                    take_profit=None,
+                    stop_loss=stop_loss,
+                    take_profit=take_profit,
                 )
                 logger.info(
                     "Opened %s %s qty=%.4f at %.4f, conf=%.2f, reason=%s",
@@ -80,6 +118,10 @@ async def main_loop(
                     order.entry_price,
                     signal.confidence,
                     signal.reason,
+                )
+                opened_this_cycle += 1
+                open_positions.append(
+                    Position(symbol=symbol, side=side, qty=qty, entry_price=order.entry_price, unrealized_pnl=0.0, leverage=settings.MAX_LEVERAGE)
                 )
 
             await asyncio.sleep(5)
@@ -95,10 +137,9 @@ async def async_main() -> None:
     _configure_logging(settings)
 
     logger.info(
-        "Starting bot | mode=%s | data_fusion=%s | llm_advisor=%s",
-        settings.TRADE_MODE,
-        settings.ENABLE_DATA_FUSION,
-        settings.ENABLE_LLM_ADVISOR,
+        "Starting bot | %s | live=%s",
+        describe_settings(settings),
+        is_live_trading(settings),
     )
 
     exchange = create_exchange_client(settings)

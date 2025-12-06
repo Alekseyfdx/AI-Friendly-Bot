@@ -59,7 +59,8 @@ def _parse_bool(value: str | None, default: bool) -> bool:
 def _parse_list(value: str | None, default: list[str]) -> list[str]:
     if value is None or value.strip() == "":
         return default
-    return [item.strip().upper() for item in value.split(",") if item.strip()]
+    parsed = [item.strip().upper() for item in value.split(",") if item.strip()]
+    return parsed if parsed else default
 
 
 def _get_env_float(name: str, default: float) -> float:
@@ -84,13 +85,21 @@ def _get_env_int(name: str, default: int) -> int:
         return default
 
 
+def _normalize_trade_mode(raw: str) -> str:
+    normalized = raw.strip().lower()
+    if normalized not in {"futures_paper", "futures_live"}:
+        logger.warning("Invalid TRADE_MODE '%s'; defaulting to futures_paper", raw)
+        return "futures_paper"
+    return normalized
+
+
 def load_settings() -> Settings:
     """Load settings from environment variables with safe defaults."""
 
     symbols = _parse_list(os.environ.get("SYMBOLS"), ["BTCUSDT", "ETHUSDT"])
 
     settings = Settings(
-        TRADE_MODE=os.environ.get("TRADE_MODE", "futures_paper"),
+        TRADE_MODE=_normalize_trade_mode(os.environ.get("TRADE_MODE", "futures_paper")),
         SYMBOLS=symbols,
         MAX_OPEN_POSITIONS=_get_env_int("MAX_OPEN_POSITIONS", 5),
         RISK_PER_TRADE_PCT=_get_env_float("RISK_PER_TRADE_PCT", 0.3),
@@ -122,9 +131,9 @@ def load_settings() -> Settings:
     )
 
     if settings.TRADE_MODE == "futures_live" and settings.HARD_LOCK_LIVE:
-        logger.warning("HARD_LOCK_LIVE is enabled; forcing paper mode despite futures_live setting.")
+        logger.warning("HARD_LOCK_LIVE enabled; forcing paper mode despite futures_live setting.")
 
-    if settings.ENABLE_LLM_ADVISOR and not settings.OPENAI_API_KEY:
+    if settings.ENABLE_LLM_ADVISOR and not (settings.OPENAI_API_KEY and settings.OPENAI_API_KEY.strip()):
         logger.warning("LLM advisor enabled but OPENAI_API_KEY missing; disabling advisor.")
         settings.ENABLE_LLM_ADVISOR = False
 
@@ -137,4 +146,14 @@ def is_live_trading(settings: Settings) -> bool:
     return settings.TRADE_MODE == "futures_live" and not settings.HARD_LOCK_LIVE
 
 
-__all__ = ["Settings", "load_settings", "is_live_trading"]
+def describe_settings(settings: Settings) -> str:
+    """Return a concise human-readable description of key settings."""
+
+    return (
+        f"mode={settings.TRADE_MODE} symbols={','.join(settings.SYMBOLS)} "
+        f"fusion={'on' if settings.ENABLE_DATA_FUSION else 'off'} "
+        f"llm={'on' if settings.ENABLE_LLM_ADVISOR else 'off'} max_pos={settings.MAX_OPEN_POSITIONS}"
+    )
+
+
+__all__ = ["Settings", "load_settings", "is_live_trading", "describe_settings"]

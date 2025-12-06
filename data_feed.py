@@ -16,12 +16,39 @@ logger = logging.getLogger("bot.data_feed")
 
 
 class NLPEngine:
-    """Very small heuristic NLP engine for sentiment and symbol extraction."""
+    """Heuristic sentiment extractor returning (sentiment, impact, symbols).
+
+    Sentiment is in [-1.0, 1.0] where -1 is very negative and 1 is very positive.
+    Impact is in [0.0, 1.0] and increases when important markers are present.
+    Symbols are inferred from common ticker patterns like BTC, ETH, SOL, BTCUSDT, or $BTC.
+    """
 
     def __init__(self) -> None:
-        self.positive_words = {"bullish", "rally", "pump", "approve", "win", "surge", "support"}
-        self.negative_words = {"bearish", "dump", "ban", "hack", "reject", "liquidation", "fear"}
-        self.impact_markers = {"sec", "etf", "breaking", "%", "fomc", "rate hike", "regulation"}
+        self.positive_words = {
+            "bullish",
+            "rally",
+            "pump",
+            "approve",
+            "win",
+            "surge",
+            "support",
+            "recover",
+            "momentum",
+            "bid",
+        }
+        self.negative_words = {
+            "bearish",
+            "dump",
+            "ban",
+            "hack",
+            "reject",
+            "liquidation",
+            "fear",
+            "selloff",
+            "slump",
+            "fraud",
+        }
+        self.impact_markers = {"sec", "etf", "breaking", "%", "fomc", "rate hike", "regulation", "macro"}
         self.symbol_patterns = [
             re.compile(r"\bBTC(?:USDT)?\b", re.IGNORECASE),
             re.compile(r"\bETH(?:USDT)?\b", re.IGNORECASE),
@@ -39,7 +66,9 @@ class NLPEngine:
         sentiment = 0.0
         if total_hits:
             sentiment = (pos_hits - neg_hits) / total_hits
-            sentiment = max(-1.0, min(1.0, sentiment))
+        else:
+            sentiment = random.uniform(-0.1, 0.1)
+        sentiment = max(-1.0, min(1.0, sentiment))
 
         impact = 0.1
         if any(marker in lowered for marker in self.impact_markers):
@@ -121,6 +150,7 @@ class GlobalDataFusion:
         if not self._tasks:
             return
         logger.info("Stopping data fusion background tasks.")
+        self._stop_event.set()
         for task in self._tasks:
             task.cancel()
         for task in self._tasks:
@@ -145,10 +175,12 @@ class GlobalDataFusion:
             old = self.events.popleft()
             for symbol in old.symbols:
                 bucket = self.symbol_events.get(symbol)
-                if bucket and bucket and bucket[0].timestamp == old.timestamp:
+                while bucket and now - bucket[0].timestamp > window:
                     bucket.popleft()
+                if bucket is not None and not bucket:
+                    self.symbol_events.pop(symbol, None)
 
-    def get_snapshot(self, symbol: str) -> SymbolSnapshot | None:
+    def get_snapshot(self, symbol: str) -> SymbolSnapshot:
         """Return aggregated snapshot for the given symbol."""
 
         events = self.symbol_events.get(symbol)
@@ -195,6 +227,7 @@ class GlobalDataFusion:
         social_sentiment_5m = _mean(social_5m)
         macro_risk = _mean(macro_impacts)
         combined_sentiment = (news_sentiment_30m * 0.5) + (social_sentiment_5m * 0.3) + (macro_risk * 0.2)
+        combined_sentiment = max(-1.0, min(1.0, combined_sentiment))
 
         return SymbolSnapshot(
             symbol=symbol,
@@ -210,22 +243,20 @@ class GlobalDataFusion:
     async def _mock_news_loop(self) -> None:
         """Generate synthetic news events periodically."""
 
-        while True:
+        sentiment_options = ["surges", "drops", "steady"]
+        while not self._stop_event.is_set():
             try:
                 await asyncio.sleep(self.settings.NEWS_POLL_INTERVAL_SEC)
                 symbol = random.choice(self.settings.SYMBOLS)
-                headlines = [
-                    f"{symbol} surges after ETF approval rumors",
-                    f"{symbol} faces regulatory concerns from SEC",
-                    f"Institutional demand for {symbol} shows bullish signals",
-                    f"{symbol} sentiment turns bearish after sudden dump",
-                ]
-                text = random.choice(headlines)
+                mood = random.choice(sentiment_options)
+                direction_text = "bullish rally" if mood == "surges" else "bearish slump" if mood == "drops" else "steady consolidation"
+                text = f"{symbol} {mood} after {random.choice(['ETF rumor', 'SEC update', 'macro shift'])} with {direction_text}"
                 sentiment, impact, symbols = self.nlp.analyze(text)
+                symbols = symbols or [symbol]
                 event = FusionEvent(
                     timestamp=datetime.utcnow(),
                     source="news",
-                    symbols=symbols or [symbol],
+                    symbols=symbols,
                     raw_text=text,
                     sentiment=sentiment,
                     impact=impact,
@@ -242,23 +273,25 @@ class GlobalDataFusion:
         """Generate synthetic social sentiment events periodically."""
 
         handles = ["@traderjoe", "@crypto_ai", "@onchain_news", "@defi_alerts"]
-        while True:
+        vibes = ["bullish", "bearish", "neutral"]
+        while not self._stop_event.is_set():
             try:
                 await asyncio.sleep(self.settings.SOCIAL_POLL_INTERVAL_SEC)
                 symbol = random.choice(self.settings.SYMBOLS)
-                blurbs = [
-                    f"{symbol} community is bullish after pump",
-                    f"Rumors of {symbol} hack spreading, bearish mood",
-                    f"Whales accumulating {symbol} quietly",
-                    f"{symbol} might dump if support fails",
-                ]
+                vibe = random.choice(vibes)
+                blurbs = {
+                    "bullish": f"community is bullish after pump on {symbol}",
+                    "bearish": f"rumors of selloff for {symbol} causing fear",
+                    "neutral": f"{symbol} traders waiting for clarity",
+                }
                 author = random.choice(handles)
-                text = f"{author}: {random.choice(blurbs)}"
+                text = f"{author}: {blurbs[vibe]}"
                 sentiment, impact, symbols = self.nlp.analyze(text)
+                symbols = symbols or [symbol]
                 event = FusionEvent(
                     timestamp=datetime.utcnow(),
                     source="social",
-                    symbols=symbols or [symbol],
+                    symbols=symbols,
                     raw_text=text,
                     sentiment=sentiment,
                     impact=impact * 0.6,

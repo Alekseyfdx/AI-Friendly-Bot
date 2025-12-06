@@ -11,16 +11,16 @@ from typing import List, Optional
 import aiohttp
 
 from config import Settings
-from data_feed import GlobalDataFusion, SymbolSnapshot
+from data_feed import SymbolSnapshot
 from exchange import BaseExchangeClient, Position
 
 logger = logging.getLogger("bot.strategy")
 
 
 def ema(values: List[float], period: int) -> List[float]:
-    """Compute exponential moving average series."""
+    """Compute exponential moving average series with validation."""
 
-    if not values or period <= 0:
+    if period <= 0 or len(values) < 1:
         return []
     k = 2 / (period + 1)
     emas: List[float] = [values[0]]
@@ -30,9 +30,9 @@ def ema(values: List[float], period: int) -> List[float]:
 
 
 def rsi(values: List[float], period: int) -> List[float]:
-    """Compute Relative Strength Index."""
+    """Compute Relative Strength Index with basic guardrails."""
 
-    if len(values) < period + 1:
+    if period <= 0 or len(values) < period + 1:
         return []
     gains: List[float] = []
     losses: List[float] = []
@@ -56,9 +56,9 @@ def rsi(values: List[float], period: int) -> List[float]:
 
 
 def atr(highs: List[float], lows: List[float], closes: List[float], period: int) -> List[float]:
-    """Compute Average True Range."""
+    """Compute Average True Range with guardrails."""
 
-    if len(highs) < period + 1 or len(lows) < period + 1 or len(closes) < period + 1:
+    if period <= 0 or len(highs) < period + 1 or len(lows) < period + 1 or len(closes) < period + 1:
         return []
     trs: List[float] = []
     for i in range(1, len(highs)):
@@ -67,6 +67,8 @@ def atr(highs: List[float], lows: List[float], closes: List[float], period: int)
         prev_close = closes[i - 1]
         tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
         trs.append(tr)
+    if len(trs) < period:
+        return []
     atr_values: List[float] = []
     first_atr = sum(trs[:period]) / period
     atr_values.append(first_atr)
@@ -96,6 +98,70 @@ class Signal:
     action: str  # "LONG", "SHORT", "FLAT"
     confidence: float
     reason: str
+
+
+def compute_base_signal(bars: List[Bar], snapshot: SymbolSnapshot | None, settings: Settings) -> Signal:
+    """Pure function to compute base signal from indicators and sentiment."""
+
+    if len(bars) < 50:
+        return Signal(symbol="", action="FLAT", confidence=0.0, reason="Insufficient data")
+
+    closes = [b.close for b in bars]
+    highs = [b.high for b in bars]
+    lows = [b.low for b in bars]
+
+    ema_fast = ema(closes, 12)
+    ema_slow = ema(closes, 26)
+    rsi_vals = rsi(closes, 14)
+    atr_vals = atr(highs, lows, closes, 14)
+
+    if not ema_fast or not ema_slow or not rsi_vals or not atr_vals:
+        return Signal(symbol="", action="FLAT", confidence=0.0, reason="Indicator data missing")
+
+    bias_long = ema_fast[-1] > ema_slow[-1]
+    bias_short = ema_fast[-1] < ema_slow[-1]
+    latest_rsi = rsi_vals[-1]
+    sentiment = snapshot.combined_sentiment if snapshot else 0.0
+    confidence = 0.4
+    reason_parts: list[str] = []
+
+    if bias_long:
+        confidence += 0.15
+        reason_parts.append("EMA fast above slow")
+    if bias_short:
+        confidence += 0.15
+        reason_parts.append("EMA fast below slow")
+    if latest_rsi < 30:
+        confidence += 0.1
+        reason_parts.append("RSI oversold")
+    elif latest_rsi > 70:
+        confidence += 0.1
+        reason_parts.append("RSI overbought")
+
+    if sentiment != 0:
+        confidence += min(abs(sentiment), 0.25)
+        reason_parts.append(f"Sentiment {sentiment:.2f}")
+
+    action = "FLAT"
+    if bias_long and latest_rsi < 70 and sentiment >= -0.2:
+        action = "LONG"
+    elif bias_short and latest_rsi > 30 and sentiment <= 0.2:
+        action = "SHORT"
+
+    confidence = max(0.0, min(1.0, confidence))
+    return Signal(symbol="", action=action, confidence=confidence, reason="; ".join(reason_parts))
+
+
+def latest_atr_value(bars: List[Bar], period: int = 14) -> float:
+    """Return latest ATR value or a small fallback (>0) if not available."""
+
+    highs = [b.high for b in bars]
+    lows = [b.low for b in bars]
+    closes = [b.close for b in bars]
+    atr_values = atr(highs, lows, closes, period)
+    if atr_values:
+        return atr_values[-1]
+    return max(closes[-1] * 0.002, 1e-6) if closes else 0.0
 
 
 class RiskEngine:
@@ -143,7 +209,11 @@ class RiskEngine:
         risk_per_trade = equity * self.settings.RISK_PER_TRADE_PCT / 100
         volatility_risk = max(atr_value, price * 0.001)
         size = risk_per_trade / volatility_risk
-        return max(size, 0.0)
+        max_notional = equity * 0.2
+        if size * price > max_notional:
+            size = max_notional / price
+        min_size = price * 0.0001
+        return size if size * price >= min_size else 0.0
 
     def register_trade_pnl(self, pnl: float, equity: float) -> None:
         self.daily_realized_pnl += pnl
@@ -233,58 +303,6 @@ class LLMAdvisor:
         return signal
 
 
-def compute_base_signal(bars: List[Bar], snapshot: SymbolSnapshot | None, settings: Settings) -> Signal:
-    """Pure function to compute base signal from indicators and sentiment."""
-
-    if len(bars) < 50:
-        return Signal(symbol="", action="FLAT", confidence=0.0, reason="Insufficient data")
-
-    closes = [b.close for b in bars]
-    highs = [b.high for b in bars]
-    lows = [b.low for b in bars]
-
-    ema_fast = ema(closes, 12)
-    ema_slow = ema(closes, 26)
-    rsi_vals = rsi(closes, 14)
-    atr_vals = atr(highs, lows, closes, 14)
-
-    if not ema_fast or not ema_slow or not rsi_vals or not atr_vals:
-        return Signal(symbol="", action="FLAT", confidence=0.0, reason="Indicator data missing")
-
-    bias_long = ema_fast[-1] > ema_slow[-1]
-    bias_short = ema_fast[-1] < ema_slow[-1]
-    latest_rsi = rsi_vals[-1]
-    sentiment = snapshot.combined_sentiment if snapshot else 0.0
-    confidence = 0.5
-    reason_parts: list[str] = []
-
-    if bias_long:
-        confidence += 0.15
-        reason_parts.append("EMA fast above slow")
-    if bias_short:
-        confidence += 0.15
-        reason_parts.append("EMA fast below slow")
-    if latest_rsi < 30:
-        confidence += 0.1
-        reason_parts.append("RSI oversold")
-    elif latest_rsi > 70:
-        confidence += 0.1
-        reason_parts.append("RSI overbought")
-
-    if sentiment != 0:
-        confidence += min(abs(sentiment), 0.3)
-        reason_parts.append(f"Sentiment {sentiment:.2f}")
-
-    action = "FLAT"
-    if bias_long and latest_rsi < 70 and sentiment >= 0:
-        action = "LONG"
-    elif bias_short and latest_rsi > 30 and sentiment <= 0:
-        action = "SHORT"
-
-    confidence = max(0.0, min(1.0, confidence))
-    return Signal(symbol="", action=action, confidence=confidence, reason="; ".join(reason_parts))
-
-
 class StrategyEngine:
     """Generate trading signals using indicators, sentiment, and optional LLM advisor."""
 
@@ -293,7 +311,7 @@ class StrategyEngine:
         self.risk_engine = risk_engine
         self.llm_advisor = LLMAdvisor(settings)
 
-    def _bars_from_klines(self, klines: List[dict]) -> List[Bar]:
+    def bars_from_klines(self, klines: List[dict]) -> List[Bar]:
         bars: List[Bar] = []
         for k in klines:
             bars.append(
@@ -308,17 +326,12 @@ class StrategyEngine:
             )
         return bars
 
-    def _latest_atr(self, bars: List[Bar]) -> float:
-        highs = [b.high for b in bars]
-        lows = [b.low for b in bars]
-        closes = [b.close for b in bars]
-        atr_values = atr(highs, lows, closes, 14)
-        return atr_values[-1] if atr_values else max(closes[-1] * 0.002, 1e-6)
-
-    async def generate_signal(self, symbol: str, exchange: BaseExchangeClient, fusion: GlobalDataFusion) -> Signal:
-        klines = await exchange.get_klines(symbol, self.settings.TIMEFRAME, self.settings.HISTORY_BARS)
-        bars = self._bars_from_klines(klines)
-        snapshot = fusion.get_snapshot(symbol)
+    async def generate_signal_from_bars(
+        self,
+        symbol: str,
+        bars: List[Bar],
+        snapshot: SymbolSnapshot | None,
+    ) -> Signal:
         base_signal = compute_base_signal(bars, snapshot, self.settings)
         base_signal.symbol = symbol
 
@@ -328,8 +341,8 @@ class StrategyEngine:
         refined_signal = await self.llm_advisor.refine_signal(base_signal, snapshot)
         return refined_signal
 
-    def latest_atr_for_symbol(self, symbol: str, bars: List[Bar]) -> float:
-        return self._latest_atr(bars)
+    def latest_atr_for_symbol(self, bars: List[Bar]) -> float:
+        return latest_atr_value(bars)
 
 
 __all__ = [
@@ -341,4 +354,5 @@ __all__ = [
     "ema",
     "rsi",
     "atr",
+    "latest_atr_value",
 ]
