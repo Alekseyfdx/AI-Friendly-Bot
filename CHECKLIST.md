@@ -2,6 +2,28 @@
 
 Ниже приведён полный список проверок для бота и локальной панели мониторинга. Отмечайте пункты как PASS/FAIL/N/A с фиксацией критичности и ответственного.
 
+## Acceptance Gates (обязательные блокеры перед merge)
+
+- [ ] **Окружение (Win11 + Python 3.12.10):** проект собирается, зависимости фиксированы, `pytest` проходит без ошибок; `ruff + black + mypy` — чисто.
+- [ ] **Секреты:** `.env.example` полный, нет утечек ключей в коде/логах; secret-scan проходит.
+- [ ] **Риск-лимиты:** `DAILY_MAX_LOSS_PCT`, `RISK_PER_TRADE_PCT`, `MAX_OPEN_POSITIONS`, `MAX_LEVERAGE` реально применяются, тесты подтверждают срабатывания.
+- [ ] **Kill-switch:** ручной (команда/файл-флаг) и автоматический (по лимиту просадки/ошибок) — оба выключают торговлю и оставляют ордера/позиции в безопасном состоянии.
+- [ ] **Исполнение:** корректная работа в `futures_paper`; в режиме симулятора нет HTTP-вызовов, которые меняют реальное состояние.
+- [ ] **Бэктест ⇒ форвард:** метрики на контрольном наборе укладываются в коридоры стабильности (см. KPI ниже).
+- [ ] **Телеметрия/логи:** ротация логов, аудиторский след сделок (CSV/SQLite) включён; неотловленных исключений в логах — 0.
+- [ ] **Документация:** README для Windows 11, CHANGELOG по Keep a Changelog с описанием изменений и как валидировались.
+
+## KPI-коридоры (регрессионные пороги)
+
+Зафиксируйте числа в репозитории (например, `ci/kpi_baseline.json`):
+
+- [ ] **Win-rate (форвард, paper):** ≥ **X%** (допуск дрейфа ± **Δ1** п.п.).
+- [ ] **Max DD (equity):** ≤ **Y%**.
+- [ ] **Avg slippage:** ≤ **Z bps** от средней 30-дневной оценки (допуск ± **Δ2** bps).
+- [ ] **Средняя задержка исполнения (сим):** ≤ **T ms** p95.
+- [ ] **Error rate (запросы к API):** < **E%**.
+- [ ] **Покрытие тестами критичных модулей:** ≥ **C%** (risk, sizing, execution, state).
+
 ## 0) Организация проверки
 - [ ] Определён один владелец приёмки и один ответственный за фиксацию багов/решений.
 - [ ] Принята шкала статусов: PASS / FAIL / N/A и уровни критичности (Blocker/Critical/Major/Minor).
@@ -188,3 +210,143 @@
 - [ ] KPI раздела 23 выполнены.
 - [ ] Go/No-Go согласован; при No-Go есть список доработок со сроками.
 - [ ] Документация и freeze-версии переданы.
+
+---
+
+## Regression Matrix (ежепул-реквизиты)
+
+### A. Окружение и качество
+
+- [ ] `py -3.12 -m venv .venv && .\.venv\Scripts\activate`
+- [ ] `pip install -U pip && pip install -r requirements.txt`
+- [ ] `ruff check .` / `black --check .` / `mypy .`
+- [ ] `pytest -q` (без падающих тестов)
+
+### B. Конфиг/ENV
+
+- [ ] Валидация `.env` (типы, диапазоны, обязательные ключи) — неподдерживаемые значения приводят к отказу загрузки.
+- [ ] Тумблеры `TRADE_MODE`, `ENABLE_LIVE_TRADING`, `SIM_HARD_LOCK` работают: симулятор действительно «сухой».
+
+### C. Данные и устойчивость
+
+- [ ] Реконнекты WS/HTTP с экспоненциальным backoff и джиттером.
+- [ ] Защита от rate-limit (квоты, очереди, лимит параллелизма).
+- [ ] Кэш символов/фильтров биржи валиден; при ошибке — graceful degrade.
+
+### D. Риск и размер
+
+- [ ] Риск на сделку ≤ `RISK_PER_TRADE_PCT`.
+- [ ] Конкурентные позиции ≤ `MAX_OPEN_POSITIONS`.
+- [ ] Пересчёт размеров учитывает `MAX_LEVERAGE`, биржевые фильтры (лот/шаг/мин. нотионал).
+
+### E. Исполнение
+
+- [ ] Маркет/лимит/стоп-лимит собираются по правилам; отмена/замена — безопасно.
+- [ ] Модель проскальзывания по волатильности (ATR/квантили) активна в симуляторе.
+- [ ] Идемпотентность: повторные ответы API не создают дубликатов.
+
+### F. State & Persistence
+
+- [ ] Позиции/ордера/эквити пишутся в SQLite/CSV; перезапуск восстанавливает состояние.
+- [ ] Миграции схемы (если есть) проверены на пустой и «грязной» БД.
+
+### G. Алгоритмы/ИИ
+
+- [ ] Решения агентов/модели логируются с seed/версией/хэшом фич.
+- [ ] При отсутствии ИИ-ключа — graceful fallback (эвристика/дефолт).
+
+### H. UI/Telegram
+
+- [ ] Нотификации только по факту сделок и важных событий; без спама.
+- [ ] Консоль/панель не блокируют event loop; обновления плавные, без лагов.
+
+### I. Безопасность
+
+- [ ] Нет ключей/сидов в коде/логах/артефактах CI.
+- [ ] Зависимости без критических CVE (`safety`/`pip-audit`).
+
+---
+
+## Быстрый smoke (локально, Win11)
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -U pip
+pip install -r requirements.txt
+pytest -q -m "not slow"
+python tools/run_backtest.py --config .env.paper --days 7 --out .\reports\bt.json
+python tools/validate_kpi.py --in .\reports\bt.json --baseline .\ci\kpi_baseline.json
+```
+
+---
+
+## CI-гейты (GitHub Actions, вставить в `.github/workflows/ci.yml`)
+
+```yaml
+name: CI
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint-type-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: python -m pip install -U pip
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - run: ruff check .
+      - run: black --check .
+      - run: mypy .
+      - run: pytest -q --junitxml=reports/junit.xml
+
+  regression-kpi:
+    runs-on: windows-latest
+    needs: [lint-type-test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: python -m pip install -U pip
+      - run: pip install -r requirements.txt
+      - name: Backtest (7d)
+        run: python tools/run_backtest.py --config .env.paper --days 7 --out reports/bt.json
+      - name: KPI Gate
+        run: python tools/validate_kpi.py --in reports/bt.json --baseline ci/kpi_baseline.json
+```
+
+---
+
+## Шаблон комментария в PR
+
+```markdown
+**Acceptance Review — Decision: ⛔ Block / ✅ Approve (выбери одно)**
+
+**Окружение:** Win11 + Python 3.12.10; CI прошёл: lint/type/tests ✅/⛔  
+**Секреты:** secret-scan ✅/⛔  
+**Риск:** лимиты и kill-switch сработали в тестах ✅/⛔  
+**Исполнение:** симулятор без побочек, slippage-модель активна ✅/⛔  
+**State:** перезапуск с восстановлением позиций ✅/⛔  
+**UI/Telegram:** нотификации и консоль без лагов ✅/⛔  
+**KPI (форвард/paper):** Win% ≥ X% (±Δ1), MaxDD ≤ Y%, Slippage ≤ Z bps, p95 latency ≤ T ms ✅/⛔
+
+**Логи/артефакты:** приложены run_backtest.json, junit.xml, отчёт KPI ✅/⛔
+
+**Итог:** …
+```
+
+---
+
+## Что добавить в PR, чтобы закрыть пробелы
+
+- [ ] `requirements-dev.txt` с ruff/black/mypy/pytest/safety.
+- [ ] `tools/run_backtest.py` и `tools/validate_kpi.py` (минимальные утилиты).
+- [ ] `ci/kpi_baseline.json` с эталонными метриками.
+- [ ] `docs/ACCEPTANCE.md` (этот чек-лист, KPI и инструкции запуска).
+- [ ] `.env.example` с безопасными дефолтами и комментариями.
+- [ ] `SECURITY.md`: как хранить ключи и как ревокуем.
+- [ ] `CHANGELOG.md` по стандарту Keep a Changelog.
